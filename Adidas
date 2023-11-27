@@ -1,0 +1,94 @@
+import numpy as np
+import tensorflow as tf
+import pandas as pd
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import Dense, LeakyReLU, BatchNormalization, Reshape, Flatten
+from sklearn.preprocessing import MinMaxScaler
+
+# Mount drive và đọc file excel vào df
+from google.colab import drive
+drive.mount('/content/drive')
+df = pd.read_excel("/content/drive/MyDrive/Adidas US Sales Datasets.xlsx")
+
+# In ra tất cả các tên cột trong DataFrame
+print(df.columns)
+
+# Loại bỏ các dòng có giá trị không hợp lệ
+df = df[pd.to_datetime(df['Unnamed: 3'], errors='coerce').notnull()]
+# Chuyển đổi cột ngày sang dạng thời gian (datetime) và chuyển đổi thành timestamp
+df.loc[:, 'Unnamed: 3'] = pd.to_datetime(df['Unnamed: 3'])
+df.loc[:, 'Unnamed: 3'] = df['Unnamed: 3'].apply(lambda x: x.timestamp())
+
+# Giả sử df là DataFrame chứa dữ liệu doanh thu
+X_train = df['Unnamed: 3'].values.reshape(-1, 1)  # Sử dụng cột ngày làm đầu vào
+y_train = df['Unnamed: 10'].values.reshape(-1, 1)  # Sử dụng cột doanh thu làm đầu ra
+
+# Chia tập dữ liệu
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.1, random_state=42)
+
+# Generator
+generator = Sequential()
+generator.add(Dense(64, input_dim=1, activation='relu'))  
+generator.add(Dense(1, activation='sigmoid'))
+# Discriminator 
+discriminator = Sequential()
+discriminator.add(Dense(64, input_dim=1, activation='relu'))
+discriminator.add(Dense(1, activation='sigmoid'))
+# GAN 
+discriminator.trainable = False
+gan = Sequential()
+gan.add(generator) 
+gan.add(discriminator)
+gan.compile(loss='binary_crossentropy', optimizer='adam')
+
+# Compiler for discriminator
+discriminator.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+# Compiler for GAN
+gan.compile(loss='mae', optimizer='adam', metrics=['mae'])
+
+# Huấn luyện
+def train(epochs=100, batch_size=128):
+    d_acc_history = []
+    g_mae_history = []
+    for e in range(epochs):
+            
+       # Lấy batch thực & giả 
+        real_x = X_train[np.random.randint(0,X_train.shape[0],size=batch_size)] 
+        noise = np.random.normal(size=(batch_size,1))
+        fake_x = generator.predict(noise)  
+            
+        # Train discriminator 
+        real_y = np.ones(batch_size)- np.random.random_sample(batch_size)*0.2 
+        fake_y = np.random.random_sample(batch_size)*0.2
+         
+        d_loss_real = discriminator.train_on_batch(real_x,real_y) 
+        d_loss_fake = discriminator.train_on_batch(fake_x,fake_y)
+         
+        # Train generator
+        noise = np.random.normal(size=(batch_size,1)) 
+        y_gen = np.ones(batch_size) - np.random.random_sample(batch_size)*0.2        
+        g_loss = gan.train_on_batch(noise, y_gen)
+
+        d_loss, d_acc = discriminator.train_on_batch(real_x,real_y) 
+        g_loss, g_mae = gan.train_on_batch(noise, y_gen)
+  
+        # lưu lại history
+        d_acc_history.append(d_acc)  
+        g_mae_history.append(g_mae) 
+
+        print(f'Epoch: {epochs}, Discriminator - loss: {d_loss:.3f}, accuracy: {d_acc:.3%}') 
+        print(f'Epoch: {epochs}, GAN - loss: {g_loss:.3f}, MAE: {g_mae:.3f}')
+
+    return generator, discriminator, gan
+
+generator, discriminator, gan = train()
+
+ # Dự đoán  
+noise = np.random.normal(size=(1,1))
+pred = generator.predict(noise)[0][0] 
+print("Predicted revenue:", pred)
+
+eval_result = gan.evaluate(X_test, y_test, verbose=0) 
+print(f'Test MAE: {eval_result[0]:.3f}')
